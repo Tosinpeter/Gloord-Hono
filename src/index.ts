@@ -26,9 +26,11 @@ app.route('/api/home', homeRoute)
 app.route('/api/progress', progressRoute)
 app.route('/api/upload', uploadRoute)
 
+const port = Number(process.env.PORT) || 3000
+
 serve({
   fetch: app.fetch,
-  port: 3000
+  port
 }, (info) => {
   console.log(`Server is running on http://localhost:${info.port}`)
 })

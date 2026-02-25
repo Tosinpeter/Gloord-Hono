@@ -31,5 +31,8 @@ local.sqlite
 # uploaded files (stored on server)
 uploads/
 
+# build output
+dist/
+
 # misc
 .DS_Store
