@@ -35,42 +35,62 @@ auth.post("/request-otp", async (c) => {
 
 // POST /api/auth/verify-otp
 auth.post("/verify-otp", async (c) => {
+  let body: { phone_number?: string; code?: string };
   try {
-    const body = await c.req.json<{ phone_number: string; code: string }>();
-    const { phone_number, code } = body;
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, error: "invalid_request_body" }, 400);
+  }
 
-    if (!phone_number || !code) {
-      return c.json({ success: false, error: "phone_and_code_required" }, 400);
-    }
+  const { phone_number, code } = body;
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  if (!phone_number || !code) {
+    return c.json({ success: false, error: "phone_and_code_required" }, 400);
+  }
 
-    if (code !== DEMO_OTP_CODE) {
-      return c.json({ success: false, error: "invalid_or_expired_code" }, 401);
-    }
+  if (code !== DEMO_OTP_CODE) {
+    return c.json({ success: false, error: "invalid_or_expired_code" }, 401);
+  }
 
-    let [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.phone_number, phone_number))
-      .limit(1);
-
-    let userProfile: Profile | null = null;
-    if (!user) {
-      [user] = await db.insert(users).values({ phone_number }).returning();
-      const [inserted] = await db
-        .insert(profile)
-        .values({ id: user.id })
-        .returning();
-      userProfile = inserted ?? null;
-    } else {
-      const [existing] = await db
+  try {
+    const result = db.transaction((tx) => {
+      let [user] = tx
         .select()
-        .from(profile)
-        .where(eq(profile.id, user.id))
-        .limit(1);
-      userProfile = existing ?? null;
-    }
+        .from(users)
+        .where(eq(users.phone_number, phone_number))
+        .limit(1)
+        .all();
+
+      let userProfile: Profile | null = null;
+
+      if (!user) {
+        [user] = tx.insert(users).values({ phone_number }).returning().all();
+        [userProfile] = tx
+          .insert(profile)
+          .values({ id: user.id })
+          .returning()
+          .all();
+      } else {
+        [userProfile] = tx
+          .select()
+          .from(profile)
+          .where(eq(profile.id, user.id))
+          .limit(1)
+          .all();
+
+        if (!userProfile) {
+          [userProfile] = tx
+            .insert(profile)
+            .values({ id: user.id })
+            .returning()
+            .all();
+        }
+      }
+
+      return { user, userProfile: userProfile ?? null };
+    });
+
+    const { user, userProfile } = result;
 
     // TODO: issue real token (e.g. JWT)
     return c.json({
@@ -92,30 +112,38 @@ auth.post("/verify-otp", async (c) => {
       },
       token: "placeholder-token",
     });
-  } catch {
-    return c.json({ success: false, error: "invalid_request_body" }, 400);
+  } catch (err) {
+    console.error("[verify-otp] DB error:", err);
+    return c.json({ success: false, error: "internal_server_error" }, 500);
   }
 });
 
 // POST /api/auth/staff-login - for gloord (admin/doctor email + password)
 auth.post("/staff-login", async (c) => {
+  let body: { email?: string; password?: string; role?: StaffRole };
   try {
-    const body = await c.req.json<{ email: string; password: string; role: StaffRole }>();
-    const { email, password, role } = body;
+    body = await c.req.json();
+  } catch {
+    return c.json({ success: false, error: "invalid_request_body" }, 400);
+  }
 
-    if (!email || !password || !role) {
-      return c.json({ success: false, error: "email_password_and_role_required" }, 400);
-    }
+  const { email, password, role } = body;
 
-    if (role !== "admin" && role !== "doctor") {
-      return c.json({ success: false, error: "invalid_role" }, 400);
-    }
+  if (!email || !password || !role) {
+    return c.json({ success: false, error: "email_password_and_role_required" }, 400);
+  }
 
-    const [staffUser] = await db
+  if (role !== "admin" && role !== "doctor") {
+    return c.json({ success: false, error: "invalid_role" }, 400);
+  }
+
+  try {
+    const [staffUser] = db
       .select()
       .from(staff)
       .where(and(eq(staff.email, email.toLowerCase().trim()), eq(staff.role, role)))
-      .limit(1);
+      .limit(1)
+      .all();
 
     if (!staffUser || !verifyPassword(password, staffUser.password_hash)) {
       return c.json({ success: false, error: "invalid_credentials" }, 401);
@@ -133,8 +161,9 @@ auth.post("/staff-login", async (c) => {
       },
       token: `staff-${staffUser.id}-placeholder`,
     });
-  } catch {
-    return c.json({ success: false, error: "invalid_request_body" }, 400);
+  } catch (err) {
+    console.error("[staff-login] DB error:", err);
+    return c.json({ success: false, error: "internal_server_error" }, 500);
   }
 });
 
